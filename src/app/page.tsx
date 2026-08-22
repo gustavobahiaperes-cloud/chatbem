@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
@@ -106,6 +107,17 @@ export default function Home() {
           <p className="text-center text-xs text-text-muted">
             Depois é só mandar o link da sala para os amigos.
           </p>
+        </div>
+
+        <div className="flex items-center justify-center gap-2 text-xs text-text-muted">
+          <Image
+            src="/gustavo.jpg"
+            alt="Gustavo"
+            width={32}
+            height={32}
+            className="h-8 w-8 rounded-full border border-border object-cover"
+          />
+          <span>Feito por Gustavo, pra galera</span>
         </div>
       </div>
     </main>
