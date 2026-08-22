@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccessToken } from "livekit-server-sdk";
 
-const ROOM_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const ROOM_RE = /^[a-zA-Z0-9_+-]{1,64}$/;
 
 export async function POST(req: NextRequest) {
   let body: { room?: unknown; name?: unknown };

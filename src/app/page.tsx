@@ -2,59 +2,23 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
-const STORAGE_KEY = "chatbem:room";
-
-const WORDS = [
-  "varanda",
-  "fogueira",
-  "trilha",
-  "quintal",
-  "mesa",
-  "garagem",
-  "clubinho",
-  "cafe",
-  "sinal",
-  "girassol",
-];
-
-function randomRoom() {
-  const word = WORDS[Math.floor(Math.random() * WORDS.length)];
-  const digits = Math.floor(1000 + Math.random() * 9000);
-  return `${word}-${digits}`;
-}
+const DEFAULT_ROOM = "dota+";
 
 function slugify(value: string) {
   return value
     .normalize("NFD")
     .replace(/[^\x00-\x7F]/g, "")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^a-z0-9+]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40);
 }
 
 export default function Home() {
   const router = useRouter();
-  const [room, setRoom] = useState(randomRoom);
-
-  // Lembra o último nome de sala usado neste navegador, pra não mudar a cada F5.
-  useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- hidrata a partir do localStorage, que só existe no cliente
-      setRoom(stored);
-    } else {
-      localStorage.setItem(STORAGE_KEY, room);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function updateRoom(value: string) {
-    setRoom(value);
-    localStorage.setItem(STORAGE_KEY, value);
-  }
+  const [room, setRoom] = useState(DEFAULT_ROOM);
 
   function goToRoom(e: React.FormEvent) {
     e.preventDefault();
@@ -63,9 +27,20 @@ export default function Home() {
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center px-5 py-12">
-      <div className="w-full max-w-md flex flex-col gap-8">
-        <div className="flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-text-muted">
+    <main className="relative flex flex-1 items-center justify-center overflow-hidden px-5 py-12">
+      <div className="fixed inset-0 -z-10">
+        <Image
+          src="/gustavo.jpg"
+          alt=""
+          fill
+          priority
+          sizes="100vw"
+          className="object-cover opacity-75"
+        />
+      </div>
+
+      <div className="relative z-10 w-full max-w-md flex flex-col gap-8">
+        <div className="flex items-center gap-2 self-center rounded-full border border-border bg-surface/85 px-3 py-1.5 font-mono text-xs uppercase tracking-widest text-text-muted shadow-sm backdrop-blur">
           <span className="h-[7px] w-[7px] rounded-full bg-accent shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_25%,transparent)]" />
           Sala privada &middot; até 10 pessoas
         </div>
@@ -101,19 +76,12 @@ export default function Home() {
                 <span className="font-mono text-sm text-text-muted">chatbem.app/sala/</span>
                 <input
                   value={room}
-                  onChange={(e) => updateRoom(e.target.value)}
+                  onChange={(e) => setRoom(e.target.value)}
                   className="min-w-0 flex-1 bg-transparent font-mono text-sm tracking-wide text-text outline-none"
                   maxLength={40}
                   aria-label="Nome da sala"
                 />
               </div>
-              <button
-                type="button"
-                onClick={() => updateRoom(randomRoom())}
-                className="self-start text-xs font-semibold text-accent-2 underline decoration-dotted underline-offset-4"
-              >
-                Gerar outro nome
-              </button>
             </label>
 
             <button
@@ -128,7 +96,7 @@ export default function Home() {
           </p>
         </div>
 
-        <div className="flex items-center justify-center gap-2 text-xs text-text-muted">
+        <div className="flex items-center justify-center gap-2 self-center rounded-full border border-border bg-surface/85 px-3 py-1.5 text-xs text-text-muted shadow-sm backdrop-blur">
           <Image
             src="/gustavo.jpg"
             alt="Gustavo"
