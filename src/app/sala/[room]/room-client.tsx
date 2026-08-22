@@ -1,8 +1,9 @@
 "use client";
 
 import "@livekit/components-styles";
-import { LiveKitRoom, VideoConference } from "@livekit/components-react";
+import { LiveKitRoom } from "@livekit/components-react";
 import { useState } from "react";
+import CallUI from "./call-ui";
 
 type Stage = "name" | "connecting" | "call" | "error";
 
@@ -56,8 +57,6 @@ export default function RoomClient({ room }: { room: string }) {
         connect
         video
         audio
-        data-lk-theme="default"
-        style={{ height: "100dvh" }}
         onDisconnected={() => setStage("name")}
         onError={(err) => {
           setError(
@@ -66,7 +65,7 @@ export default function RoomClient({ room }: { room: string }) {
           setStage("error");
         }}
       >
-        <VideoConference />
+        <CallUI room={room} />
       </LiveKitRoom>
     );
   }

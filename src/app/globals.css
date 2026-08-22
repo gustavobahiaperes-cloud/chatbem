@@ -63,8 +63,10 @@ body {
   }
 }
 
-/* LiveKit VideoConference: alinhar cores do componente pronto com a marca Chatbem */
-.lk-video-conference {
+/* Tela de chamada (componentes soltos do LiveKit, UI própria em português):
+   alinha as cores internas do LiveKit (nome do participante, indicadores) com
+   a marca Chatbem. */
+.chatbem-call {
   --lk-bg: var(--bg);
   --lk-bg2: var(--surface);
   --lk-bg3: var(--surface-sunken);
@@ -72,5 +74,12 @@ body {
   --lk-accent-bg: var(--accent);
   --lk-accent-fg: var(--accent-ink);
   --lk-border-color: var(--border);
-  height: 100dvh;
+}
+
+/* Espelha só a sua própria prévia de câmera (efeito "espelho", como em qualquer
+   app de chamada). Isso é puramente visual no seu navegador — não muda o que os
+   outros participantes recebem, e não depende da webcam avisar que é frontal
+   (a maioria não avisa, por isso o LiveKit não fazia isso sozinho). */
+.lk-participant-media-video[data-lk-local-participant="true"][data-lk-source="camera"] {
+  transform: rotateY(180deg);
 }
