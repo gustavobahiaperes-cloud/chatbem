@@ -2,7 +2,9 @@
 
 import Image from "next/image";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+const STORAGE_KEY = "chatbem:room";
 
 const WORDS = [
   "varanda",
@@ -36,6 +38,23 @@ function slugify(value: string) {
 export default function Home() {
   const router = useRouter();
   const [room, setRoom] = useState(randomRoom);
+
+  // Lembra o último nome de sala usado neste navegador, pra não mudar a cada F5.
+  useEffect(() => {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (stored) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- hidrata a partir do localStorage, que só existe no cliente
+      setRoom(stored);
+    } else {
+      localStorage.setItem(STORAGE_KEY, room);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function updateRoom(value: string) {
+    setRoom(value);
+    localStorage.setItem(STORAGE_KEY, value);
+  }
 
   function goToRoom(e: React.FormEvent) {
     e.preventDefault();
@@ -82,7 +101,7 @@ export default function Home() {
                 <span className="font-mono text-sm text-text-muted">chatbem.app/sala/</span>
                 <input
                   value={room}
-                  onChange={(e) => setRoom(e.target.value)}
+                  onChange={(e) => updateRoom(e.target.value)}
                   className="min-w-0 flex-1 bg-transparent font-mono text-sm tracking-wide text-text outline-none"
                   maxLength={40}
                   aria-label="Nome da sala"
@@ -90,7 +109,7 @@ export default function Home() {
               </div>
               <button
                 type="button"
-                onClick={() => setRoom(randomRoom())}
+                onClick={() => updateRoom(randomRoom())}
                 className="self-start text-xs font-semibold text-accent-2 underline decoration-dotted underline-offset-4"
               >
                 Gerar outro nome
@@ -113,9 +132,9 @@ export default function Home() {
           <Image
             src="/gustavo.jpg"
             alt="Gustavo"
-            width={32}
-            height={32}
-            className="h-8 w-8 rounded-full border border-border object-cover"
+            width={96}
+            height={96}
+            className="h-24 w-24 rounded-full border border-border object-cover"
           />
           <span>Feito por Gustavo, pra galera</span>
         </div>
