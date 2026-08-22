@@ -59,6 +59,12 @@ export default function RoomClient({ room }: { room: string }) {
         data-lk-theme="default"
         style={{ height: "100dvh" }}
         onDisconnected={() => setStage("name")}
+        onError={(err) => {
+          setError(
+            `Não deu para conectar na chamada: ${err.message}. Confira se as chaves do LiveKit na Vercel estão corretas.`,
+          );
+          setStage("error");
+        }}
       >
         <VideoConference />
       </LiveKitRoom>
