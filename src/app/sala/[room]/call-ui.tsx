@@ -6,6 +6,7 @@ import {
   GridLayout,
   ParticipantTile,
   RoomAudioRenderer,
+  useChat,
   useConnectionQualityIndicator,
   useDataChannel,
   useIsSpeaking,
@@ -16,6 +17,10 @@ import {
   useTrackToggle,
 } from "@livekit/components-react";
 import type { Participant, RemoteParticipant } from "livekit-client";
+import { Avatar, displayNameOf } from "./avatar";
+import ChatPanel from "./chat-panel";
+
+type Panel = "pessoas" | "chat";
 
 type SilenceAlert = {
   identity: string;
@@ -88,6 +93,20 @@ function LinkIcon() {
   );
 }
 
+function ChatIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M5 5.5A1.5 1.5 0 0 1 6.5 4h11A1.5 1.5 0 0 1 19 5.5v9a1.5 1.5 0 0 1-1.5 1.5H10l-4.2 3.5a.5.5 0 0 1-.8-.4V5.5Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path d="M8.5 9h7M8.5 12h4.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -113,24 +132,6 @@ function ChevronIcon({ open }: { open: boolean }) {
 
 /* ---------- Utilidades ---------- */
 
-function displayNameOf(p: Participant) {
-  return p.name || p.identity;
-}
-
-function initialsOf(name: string) {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
-// Cor estável por nome, para cada pessoa ter sempre o mesmo avatar.
-function hueOf(name: string) {
-  let h = 0;
-  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
-  return h;
-}
-
 function loadVolumes(): Record<string, number> {
   try {
     const raw = localStorage.getItem(VOLUME_KEY);
@@ -149,23 +150,6 @@ function saveVolumes(volumes: Record<string, number>) {
 }
 
 /* ---------- Componentes ---------- */
-
-function Avatar({ name, speaking }: { name: string; speaking: boolean }) {
-  const hue = hueOf(name);
-  return (
-    <span
-      aria-hidden
-      className={`relative grid h-9 w-9 shrink-0 place-items-center rounded-full text-[13px] font-bold text-white transition-shadow ${
-        speaking
-          ? "shadow-[0_0_0_2px_var(--surface),0_0_0_4px_var(--accent-2)]"
-          : "shadow-[0_0_0_2px_transparent]"
-      }`}
-      style={{ background: `hsl(${hue} 42% 44%)` }}
-    >
-      {initialsOf(name)}
-    </span>
-  );
-}
 
 function SignalBars({ participant }: { participant: Participant }) {
   const { quality } = useConnectionQualityIndicator({ participant });
@@ -389,7 +373,15 @@ export default function CallUI({
   const { localParticipant } = useLocalParticipant();
 
   // Esta tela só existe depois que a pessoa clica em "Entrar", então window já existe.
-  const [panelOpen, setPanelOpen] = useState(() => window.matchMedia("(min-width: 768px)").matches);
+  const [panel, setPanel] = useState<Panel | null>(() =>
+    window.matchMedia("(min-width: 768px)").matches ? "pessoas" : null,
+  );
+  const { chatMessages, send, isSending } = useChat();
+  // Quantas mensagens já tinham chegado da última vez que o chat esteve visível.
+  const [seenCount, setSeenCount] = useState(0);
+  const chatVisible = panel === "chat";
+  const unread = chatVisible ? 0 : chatMessages.length - seenCount;
+  const lastToasted = useRef(0);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [alert, setAlert] = useState<SilenceAlert | null>(null);
   const [silencedUntil, setSilencedUntil] = useState<Record<string, number>>({});
@@ -417,6 +409,24 @@ export default function CallUI({
       lkRoom.off(RoomEvent.ParticipantDisconnected, onLeave);
     };
   }, [lkRoom, pushToast]);
+
+  // Mostra um aviso rápido quando chega mensagem e o chat está fechado.
+  useEffect(() => {
+    const fresh = chatMessages.slice(lastToasted.current);
+    lastToasted.current = chatMessages.length;
+    if (chatVisible) return;
+    for (const m of fresh) {
+      if (!m.from || m.from.identity === localParticipant.identity) continue;
+      const preview = m.message.length > 60 ? `${m.message.slice(0, 60)}…` : m.message;
+      pushToast(`${displayNameOf(m.from)}: ${preview}`);
+    }
+  }, [chatMessages, chatVisible, localParticipant.identity, pushToast]);
+
+  // Abre/fecha/troca a aba da lateral. Ao sair do chat, guarda até onde foi lido.
+  function showPanel(next: Panel | null) {
+    if (panel === "chat" || next === "chat") setSeenCount(chatMessages.length);
+    setPanel(next);
+  }
 
   // Aplica o volume salvo (por nome) a cada pessoa, inclusive quem entrar depois.
   useEffect(() => {
@@ -563,19 +573,39 @@ export default function CallUI({
 
           <button
             type="button"
-            onClick={() => setPanelOpen((v) => !v)}
-            aria-pressed={panelOpen}
+            onClick={() => showPanel(panel === "pessoas" ? null : "pessoas")}
+            aria-pressed={panel === "pessoas"}
             className={`relative flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors sm:px-4 ${
-              panelOpen
+              panel === "pessoas"
                 ? "border-accent/50 bg-accent/15 text-accent"
                 : "border-border bg-surface-sunken text-text-muted hover:text-text"
             }`}
           >
             <PeopleIcon />
             Pessoas
-            <span className="absolute -right-1.5 -top-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-accent px-1 font-mono text-[10px] text-accent-ink">
+            <span className="absolute -right-1.5 -top-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-surface-sunken px-1 font-mono text-[10px] text-text ring-1 ring-border">
               {participants.length}
             </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => showPanel(panel === "chat" ? null : "chat")}
+            aria-pressed={panel === "chat"}
+            aria-label={unread > 0 ? `Chat, ${unread} mensagens novas` : "Chat"}
+            className={`relative flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors sm:px-4 ${
+              panel === "chat"
+                ? "border-accent/50 bg-accent/15 text-accent"
+                : "border-border bg-surface-sunken text-text-muted hover:text-text"
+            }`}
+          >
+            <ChatIcon />
+            Chat
+            {unread > 0 && (
+              <span className="absolute -right-1.5 -top-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 font-mono text-[10px] font-bold text-white">
+                {unread > 99 ? "99+" : unread}
+              </span>
+            )}
           </button>
 
           {/* Botão próprio em vez do DisconnectButton: o CSS do LiveKit sobrescrevia as cores. */}
@@ -590,72 +620,103 @@ export default function CallUI({
         </div>
       </section>
 
-      {/* Lateral de membros: fixa no computador, gaveta por cima no celular */}
-      {panelOpen && (
+      {/* Lateral (Pessoas / Chat): fixa no computador, gaveta por cima no celular */}
+      {panel && (
         <>
           <div
             aria-hidden
-            onClick={() => setPanelOpen(false)}
+            onClick={() => showPanel(null)}
             className="fixed inset-0 z-30 bg-black/50 md:hidden"
           />
           <aside
-            aria-label="Pessoas na chamada"
-            className="fixed inset-y-0 right-0 z-40 flex w-[min(320px,88vw)] flex-col border-l border-border bg-surface md:static md:z-auto md:w-72"
+            aria-label={panel === "chat" ? "Chat da sala" : "Pessoas na chamada"}
+            className="fixed inset-y-0 right-0 z-40 flex w-[min(340px,90vw)] flex-col border-l border-border bg-surface md:static md:z-auto md:w-80"
           >
-            <div className="flex items-center justify-between gap-2 px-4 pb-2 pt-4">
-              <h2 className="font-[family-name:var(--font-display)] text-xl">Pessoas</h2>
+            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
+              <div role="tablist" className="flex gap-1 rounded-xl bg-surface-sunken p-1">
+                {(["pessoas", "chat"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    aria-selected={panel === tab}
+                    onClick={() => showPanel(tab)}
+                    className={`relative rounded-lg px-3.5 py-1.5 text-[13px] font-semibold transition-colors ${
+                      panel === tab ? "bg-surface text-text shadow-sm" : "text-text-muted hover:text-text"
+                    }`}
+                  >
+                    {tab === "pessoas" ? `Pessoas · ${participants.length}` : "Chat"}
+                    {tab === "chat" && unread > 0 && (
+                      <span className="ml-1.5 rounded-full bg-danger px-1.5 font-mono text-[10px] text-white">
+                        {unread}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
               <button
                 type="button"
-                onClick={() => setPanelOpen(false)}
-                aria-label="Fechar lista de pessoas"
+                onClick={() => showPanel(null)}
+                aria-label="Fechar lateral"
                 className="grid h-8 w-8 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-sunken hover:text-text"
               >
                 <CloseIcon />
               </button>
             </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-              <p className="px-2 pb-1 pt-3 font-mono text-[11px] uppercase tracking-wider text-text-muted">
-                Na chamada &mdash; {participants.length}
-              </p>
-              <ul className="flex flex-col gap-0.5">
-                {sorted.map((p) => {
-                  const isLocal = p.identity === localParticipant.identity;
-                  const name = displayNameOf(p);
-                  return (
-                    <MemberRow
-                      key={p.identity}
-                      participant={p}
-                      isLocal={isLocal}
-                      silencedUntil={silencedUntil[p.identity]}
-                      now={now}
-                      expanded={expanded === p.identity}
-                      onToggle={() => setExpanded((cur) => (cur === p.identity ? null : p.identity))}
-                      volume={volumes[name] ?? 100}
-                      onVolume={(v) => setVolumeFor(name, v)}
-                      onMute={handleMute}
-                      muting={mutingId === p.identity}
-                    />
-                  );
-                })}
-              </ul>
-              {participants.length > 1 && (
-                <p className="px-2 pt-3 text-[11.5px] leading-relaxed text-text-muted">
-                  Clique em alguém para ajustar o volume ou silenciar.
-                </p>
-              )}
-            </div>
-
-            <div className="border-t border-border p-3">
-              <button
-                type="button"
-                onClick={copyLink}
-                className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-accent-ink transition-transform hover:-translate-y-px"
-              >
-                <LinkIcon />
-                {copied ? "Link copiado!" : "Copiar link da sala"}
-              </button>
-            </div>
+            {panel === "chat" ? (
+              <ChatPanel
+                messages={chatMessages}
+                send={send}
+                isSending={isSending}
+                localIdentity={localParticipant.identity}
+              />
+            ) : (
+              <>
+                <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+                  <p className="px-2 pb-1 pt-3 font-mono text-[11px] uppercase tracking-wider text-text-muted">
+                    Na chamada &mdash; {participants.length}
+                  </p>
+                  <ul className="flex flex-col gap-0.5">
+                    {sorted.map((p) => {
+                      const isLocal = p.identity === localParticipant.identity;
+                      const name = displayNameOf(p);
+                      return (
+                        <MemberRow
+                          key={p.identity}
+                          participant={p}
+                          isLocal={isLocal}
+                          silencedUntil={silencedUntil[p.identity]}
+                          now={now}
+                          expanded={expanded === p.identity}
+                          onToggle={() => setExpanded((cur) => (cur === p.identity ? null : p.identity))}
+                          volume={volumes[name] ?? 100}
+                          onVolume={(v) => setVolumeFor(name, v)}
+                          onMute={handleMute}
+                          muting={mutingId === p.identity}
+                        />
+                      );
+                    })}
+                  </ul>
+                  {participants.length > 1 && (
+                    <p className="px-2 pt-3 text-[11.5px] leading-relaxed text-text-muted">
+                      Clique em alguém para ajustar o volume ou silenciar.
+                    </p>
+                  )}
+                </div>
+    
+                <div className="border-t border-border p-3">
+                  <button
+                    type="button"
+                    onClick={copyLink}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-accent-ink transition-transform hover:-translate-y-px"
+                  >
+                    <LinkIcon />
+                    {copied ? "Link copiado!" : "Copiar link da sala"}
+                  </button>
+                </div>
+              </>
+            )}
           </aside>
         </>
       )}
