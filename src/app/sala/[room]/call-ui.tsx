@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionQuality, RoomEvent, Track } from "livekit-client";
 import {
-  DisconnectButton,
   GridLayout,
   ParticipantTile,
   RoomAudioRenderer,
@@ -219,6 +218,17 @@ function ControlButton({
       : source === Track.Source.Camera
         ? CameraIcon
         : ScreenShareIcon;
+  const isScreen = source === Track.Source.ScreenShare;
+
+  // Microfone/câmera: neutro quando ligado, vermelho quando desligado.
+  // Tela: verde enquanto está compartilhando.
+  const look = isScreen
+    ? enabled
+      ? "border-accent-2/50 bg-accent-2/15 text-accent-2"
+      : "border-border bg-surface-sunken text-text-muted hover:text-text"
+    : enabled
+      ? "border-border bg-surface-sunken text-text hover:bg-border"
+      : "border-danger/40 bg-danger/15 text-danger hover:bg-danger/25";
 
   return (
     <button
@@ -226,11 +236,7 @@ function ControlButton({
       onClick={() => toggle()}
       disabled={pending}
       aria-pressed={enabled}
-      className={`flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors disabled:opacity-50 sm:px-4 ${
-        enabled
-          ? "border-accent bg-accent text-accent-ink"
-          : "border-border bg-surface-sunken text-text-muted hover:text-text"
-      }`}
+      className={`flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors disabled:opacity-50 sm:px-4 ${look}`}
     >
       <Icon off={source !== Track.Source.ScreenShare ? !enabled : undefined} />
       {enabled ? onLabel : offLabel}
@@ -269,7 +275,7 @@ function MemberRow({
   const sharing = participant.isScreenShareEnabled;
 
   let status: { text: string; className: string };
-  if (remaining > 0) status = { text: `silenciado · ${remaining}s`, className: "text-accent" };
+  if (remaining > 0) status = { text: `silenciado · ${remaining}s`, className: "text-danger" };
   else if (speaking) status = { text: "falando", className: "text-accent-2" };
   else if (sharing) status = { text: "compartilhando a tela", className: "text-text-muted" };
   else if (camOn) status = { text: "câmera ligada", className: "text-text-muted" };
@@ -300,7 +306,7 @@ function MemberRow({
           </span>
         )}
         {!micOn && (
-          <span title="Microfone desligado" className="text-accent">
+          <span title="Microfone desligado" className="text-danger">
             <MicIcon off size={15} />
           </span>
         )}
@@ -352,7 +358,7 @@ function MemberRow({
               type="button"
               onClick={() => onMute(participant as RemoteParticipant)}
               disabled={muting}
-              className="rounded-lg border border-border bg-surface px-3 py-2 text-xs font-semibold text-text-muted transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+              className="rounded-lg border border-border bg-surface px-3 py-2 text-xs font-semibold text-text-muted transition-colors hover:border-danger hover:text-danger disabled:opacity-50"
             >
               {muting ? "Silenciando..." : "Silenciar por 1 min"}
             </button>
@@ -561,7 +567,7 @@ export default function CallUI({
             aria-pressed={panelOpen}
             className={`relative flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors sm:px-4 ${
               panelOpen
-                ? "border-accent-2 bg-accent-2 text-white"
+                ? "border-accent/50 bg-accent/15 text-accent"
                 : "border-border bg-surface-sunken text-text-muted hover:text-text"
             }`}
           >
@@ -572,10 +578,15 @@ export default function CallUI({
             </span>
           </button>
 
-          <DisconnectButton className="flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border border-border bg-surface-sunken px-3 py-2.5 text-xs font-semibold text-text-muted transition-colors hover:border-accent hover:text-accent sm:px-4">
+          {/* Botão próprio em vez do DisconnectButton: o CSS do LiveKit sobrescrevia as cores. */}
+          <button
+            type="button"
+            onClick={() => lkRoom.disconnect()}
+            className="flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border border-danger bg-danger px-3 py-2.5 text-xs font-semibold text-white transition-[filter] hover:brightness-110 sm:px-4"
+          >
             <LeaveIcon />
             Sair
-          </DisconnectButton>
+          </button>
         </div>
       </section>
 

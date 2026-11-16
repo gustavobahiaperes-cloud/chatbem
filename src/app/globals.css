@@ -12,6 +12,7 @@
   --accent-soft: #f3e1c2;
   --accent-2: #3f6e64;
   --border: #dad3e4;
+  --danger: #c93a3f;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -26,6 +27,7 @@
     --accent-soft: #3a2c11;
     --accent-2: #6fa89c;
     --border: #322c40;
+    --danger: #ef5f63;
   }
 }
 
@@ -40,6 +42,7 @@
   --color-accent-soft: var(--accent-soft);
   --color-accent-2: var(--accent-2);
   --color-border: var(--border);
+  --color-danger: var(--danger);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-display: var(--font-display);
@@ -67,6 +70,21 @@ body {
    alinha as cores internas do LiveKit (nome do participante, indicadores) com
    a marca Chatbem. */
 .chatbem-call {
+  /* A chamada é sempre escura, independente do tema do sistema: vídeo e
+     avatares se destacam melhor, e o verde de "falando" fica bem visível. */
+  color-scheme: dark;
+  --bg: #0f0e15;
+  --surface: #17151f;
+  --surface-sunken: #211e2b;
+  --text: #eeedf4;
+  --text-muted: #9a96aa;
+  --accent: #f2a93b;
+  --accent-ink: #1c1305;
+  --accent-soft: #3b2c12;
+  --accent-2: #3fcf8e;
+  --border: #2b2738;
+  --danger: #f0565b;
+
   --lk-bg: var(--bg);
   --lk-bg2: var(--surface);
   --lk-bg3: var(--surface-sunken);

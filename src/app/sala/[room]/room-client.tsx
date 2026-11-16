@@ -92,7 +92,7 @@ export default function RoomClient({ room }: { room: string }) {
         serverUrl={serverUrl}
         token={token}
         connect
-        video
+        video={false}
         audio
         onDisconnected={(reason) => {
           // Saída voluntária (botão Sair) volta para a tela do nome sem mensagem.
@@ -154,7 +154,7 @@ export default function RoomClient({ room }: { room: string }) {
               Como você quer ser chamado?
             </h1>
             <p className="max-w-[38ch] text-[14.5px] leading-relaxed text-text-muted">
-              O navegador vai pedir permissão para usar câmera e microfone assim que você entrar.
+              O navegador vai pedir permissão para o microfone. A câmera entra desligada: ligue quando quiser.
             </p>
           </div>
 
