@@ -2,10 +2,45 @@
 
 import "@livekit/components-styles";
 import { LiveKitRoom } from "@livekit/components-react";
+import { ConnectionError, DisconnectReason, MediaDeviceFailure } from "livekit-client";
 import { useState } from "react";
 import CallUI from "./call-ui";
 
 type Stage = "name" | "connecting" | "call" | "error";
+
+function mediaFailureMessage(failure: MediaDeviceFailure | undefined, kind?: MediaDeviceKind) {
+  const device =
+    kind === "videoinput" ? "a câmera" : kind === "audioinput" ? "o microfone" : "câmera/microfone";
+  switch (failure) {
+    case MediaDeviceFailure.PermissionDenied:
+      return `O navegador bloqueou ${device}. Libere a permissão no cadeado ao lado do endereço e clique no botão de novo.`;
+    case MediaDeviceFailure.NotFound:
+      return `Não encontramos ${device} neste aparelho. Você continua na chamada mesmo assim.`;
+    case MediaDeviceFailure.DeviceInUse:
+      return `${device[0].toUpperCase()}${device.slice(1)} está sendo usado por outro programa (Discord, OBS, Zoom...). Feche-o e clique no botão de novo.`;
+    default:
+      return `Não deu para ligar ${device}. Você continua na chamada e pode tentar de novo pelos botões.`;
+  }
+}
+
+function disconnectMessage(reason?: DisconnectReason) {
+  switch (reason) {
+    case DisconnectReason.DUPLICATE_IDENTITY:
+      return "Você entrou na sala em outra aba ou aparelho, então esta conexão foi encerrada.";
+    case DisconnectReason.PARTICIPANT_REMOVED:
+      return "Você foi removido da sala.";
+    case DisconnectReason.ROOM_DELETED:
+      return "A sala foi encerrada.";
+    case DisconnectReason.JOIN_FAILURE:
+    case DisconnectReason.SIGNAL_CLOSE:
+    case DisconnectReason.STATE_MISMATCH:
+      return "A conexão com a chamada caiu. Verifique sua internet e tente entrar de novo.";
+    default:
+      return `A conexão com a chamada foi encerrada${
+        reason !== undefined ? ` (código ${reason})` : ""
+      }. Tente entrar de novo.`;
+  }
+}
 
 export default function RoomClient({ room }: { room: string }) {
   const [stage, setStage] = useState<Stage>("name");
@@ -14,6 +49,7 @@ export default function RoomClient({ room }: { room: string }) {
   const [token, setToken] = useState("");
   const [serverUrl, setServerUrl] = useState("");
   const [copied, setCopied] = useState(false);
+  const [mediaWarning, setMediaWarning] = useState("");
 
   async function join(e: React.FormEvent) {
     e.preventDefault();
@@ -22,6 +58,7 @@ export default function RoomClient({ room }: { room: string }) {
 
     setStage("connecting");
     setError("");
+    setMediaWarning("");
     try {
       const res = await fetch("/api/token", {
         method: "POST",
@@ -57,15 +94,38 @@ export default function RoomClient({ room }: { room: string }) {
         connect
         video
         audio
-        onDisconnected={() => setStage("name")}
+        onDisconnected={(reason) => {
+          // Saída voluntária (botão Sair) volta para a tela do nome sem mensagem.
+          // Qualquer outro motivo mostra o erro em vez de "empurrar" a pessoa de volta em silêncio.
+          if (reason === DisconnectReason.CLIENT_INITIATED) {
+            setStage((prev) => (prev === "error" ? prev : "name"));
+            return;
+          }
+          setError((prev) => prev || disconnectMessage(reason));
+          setStage("error");
+        }}
+        onMediaDeviceFailure={(failure, kind) => {
+          setMediaWarning(mediaFailureMessage(failure, kind));
+        }}
         onError={(err) => {
-          setError(
-            `Não deu para conectar na chamada: ${err.message}. Confira se as chaves do LiveKit na Vercel estão corretas.`,
-          );
+          // Falha de câmera/microfone também chega aqui. Isso não pode derrubar a
+          // chamada: a pessoa fica na sala e vê um aviso.
+          if (!(err instanceof ConnectionError)) {
+            console.warn("[chatbem] falha ao ligar câmera/microfone", err);
+            setMediaWarning(
+              (prev) => prev || mediaFailureMessage(MediaDeviceFailure.getFailure(err)),
+            );
+            return;
+          }
+          setError(`Não deu para conectar na chamada: ${err.message}. Tente de novo em instantes.`);
           setStage("error");
         }}
       >
-        <CallUI room={room} />
+        <CallUI
+          room={room}
+          mediaWarning={mediaWarning}
+          onDismissMediaWarning={() => setMediaWarning("")}
+        />
       </LiveKitRoom>
     );
   }

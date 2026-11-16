@@ -148,7 +148,15 @@ function ParticipantRow({
   );
 }
 
-export default function CallUI({ room }: { room: string }) {
+export default function CallUI({
+  room,
+  mediaWarning,
+  onDismissMediaWarning,
+}: {
+  room: string;
+  mediaWarning?: string;
+  onDismissMediaWarning?: () => void;
+}) {
   const tracks = useTracks([
     { source: Track.Source.Camera, withPlaceholder: true },
     { source: Track.Source.ScreenShare, withPlaceholder: false },
@@ -214,6 +222,23 @@ export default function CallUI({ room }: { room: string }) {
         </span>
         <span className="text-xs text-text-muted">{participants.length} na chamada</span>
       </div>
+
+      {mediaWarning && (
+        <div
+          role="status"
+          className="flex items-start justify-between gap-3 border-b border-border bg-accent-soft px-4 py-2.5 text-sm text-text"
+        >
+          <span>{mediaWarning}</span>
+          <button
+            type="button"
+            onClick={onDismissMediaWarning}
+            aria-label="Fechar aviso"
+            className="shrink-0 text-xs font-semibold text-text-muted hover:text-text"
+          >
+            Fechar
+          </button>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-hidden p-3">
         <GridLayout tracks={tracks} className="h-full">
