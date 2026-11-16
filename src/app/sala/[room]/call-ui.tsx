@@ -20,7 +20,12 @@ import type { Participant, RemoteParticipant } from "livekit-client";
 import { Avatar, displayNameOf } from "./avatar";
 import ChatPanel from "./chat-panel";
 
-type Panel = "pessoas" | "chat";
+// A partir desta largura, chat e lista de pessoas cabem lado a lado sem espremer o vídeo.
+const ROOMY = "(min-width: 1100px)";
+
+function matches(query: string) {
+  return window.matchMedia(query).matches;
+}
 
 type SilenceAlert = {
   identity: string;
@@ -127,6 +132,37 @@ function ChevronIcon({ open }: { open: boolean }) {
     >
       <path d="m6 9 6 6 6-6" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+function PanelHeader({
+  title,
+  count,
+  onClose,
+  closeLabel,
+}: {
+  title: string;
+  count?: number;
+  onClose: () => void;
+  closeLabel: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+      <h2 className="text-sm font-bold text-text">
+        {title}
+        {count !== undefined && (
+          <span className="ml-2 font-mono text-xs font-normal text-text-muted">{count}</span>
+        )}
+      </h2>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label={closeLabel}
+        className="grid h-7 w-7 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-sunken hover:text-text"
+      >
+        <CloseIcon />
+      </button>
+    </div>
   );
 }
 
@@ -373,13 +409,13 @@ export default function CallUI({
   const { localParticipant } = useLocalParticipant();
 
   // Esta tela só existe depois que a pessoa clica em "Entrar", então window já existe.
-  const [panel, setPanel] = useState<Panel | null>(() =>
-    window.matchMedia("(min-width: 768px)").matches ? "pessoas" : null,
-  );
+  // Pessoas abre sozinho a partir de tablet; o chat também abre em telas largas.
+  const [showPeople, setShowPeople] = useState(() => matches("(min-width: 768px)"));
+  const [showChat, setShowChat] = useState(() => matches("(min-width: 1280px)"));
   const { chatMessages, send, isSending } = useChat();
   // Quantas mensagens já tinham chegado da última vez que o chat esteve visível.
   const [seenCount, setSeenCount] = useState(0);
-  const chatVisible = panel === "chat";
+  const chatVisible = showChat;
   const unread = chatVisible ? 0 : chatMessages.length - seenCount;
   const lastToasted = useRef(0);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -422,10 +458,29 @@ export default function CallUI({
     }
   }, [chatMessages, chatVisible, localParticipant.identity, pushToast]);
 
-  // Abre/fecha/troca a aba da lateral. Ao sair do chat, guarda até onde foi lido.
-  function showPanel(next: Panel | null) {
-    if (panel === "chat" || next === "chat") setSeenCount(chatMessages.length);
-    setPanel(next);
+  // Chat e Pessoas abrem lado a lado quando a tela é larga. Em telas menores
+  // (celular, tablet, janela estreita) só cabe uma coluna, então abrir uma fecha a outra.
+  // Ao abrir ou fechar o chat, guarda até onde foi lido para o contador de não lidas.
+  function toggleChat() {
+    const next = !showChat;
+    setSeenCount(chatMessages.length);
+    if (next && !matches(ROOMY)) setShowPeople(false);
+    setShowChat(next);
+  }
+
+  function togglePeople() {
+    const next = !showPeople;
+    if (next && showChat && !matches(ROOMY)) {
+      setSeenCount(chatMessages.length);
+      setShowChat(false);
+    }
+    setShowPeople(next);
+  }
+
+  function closeAll() {
+    if (showChat) setSeenCount(chatMessages.length);
+    setShowChat(false);
+    setShowPeople(false);
   }
 
   // Aplica o volume salvo (por nome) a cada pessoa, inclusive quem entrar depois.
@@ -573,10 +628,10 @@ export default function CallUI({
 
           <button
             type="button"
-            onClick={() => showPanel(panel === "pessoas" ? null : "pessoas")}
-            aria-pressed={panel === "pessoas"}
+            onClick={togglePeople}
+            aria-pressed={showPeople}
             className={`relative flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors sm:px-4 ${
-              panel === "pessoas"
+              showPeople
                 ? "border-accent/50 bg-accent/15 text-accent"
                 : "border-border bg-surface-sunken text-text-muted hover:text-text"
             }`}
@@ -590,11 +645,11 @@ export default function CallUI({
 
           <button
             type="button"
-            onClick={() => showPanel(panel === "chat" ? null : "chat")}
-            aria-pressed={panel === "chat"}
+            onClick={toggleChat}
+            aria-pressed={showChat}
             aria-label={unread > 0 ? `Chat, ${unread} mensagens novas` : "Chat"}
             className={`relative flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border px-3 py-2.5 text-xs font-semibold transition-colors sm:px-4 ${
-              panel === "chat"
+              showChat
                 ? "border-accent/50 bg-accent/15 text-accent"
                 : "border-border bg-surface-sunken text-text-muted hover:text-text"
             }`}
@@ -620,105 +675,82 @@ export default function CallUI({
         </div>
       </section>
 
-      {/* Lateral (Pessoas / Chat): fixa no computador, gaveta por cima no celular */}
-      {panel && (
-        <>
-          <div
-            aria-hidden
-            onClick={() => showPanel(null)}
-            className="fixed inset-0 z-30 bg-black/50 md:hidden"
-          />
-          <aside
-            aria-label={panel === "chat" ? "Chat da sala" : "Pessoas na chamada"}
-            className="fixed inset-y-0 right-0 z-40 flex w-[min(340px,90vw)] flex-col border-l border-border bg-surface md:static md:z-auto md:w-80"
-          >
-            <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
-              <div role="tablist" className="flex gap-1 rounded-xl bg-surface-sunken p-1">
-                {(["pessoas", "chat"] as const).map((tab) => (
-                  <button
-                    key={tab}
-                    type="button"
-                    role="tab"
-                    aria-selected={panel === tab}
-                    onClick={() => showPanel(tab)}
-                    className={`relative rounded-lg px-3.5 py-1.5 text-[13px] font-semibold transition-colors ${
-                      panel === tab ? "bg-surface text-text shadow-sm" : "text-text-muted hover:text-text"
-                    }`}
-                  >
-                    {tab === "pessoas" ? `Pessoas · ${participants.length}` : "Chat"}
-                    {tab === "chat" && unread > 0 && (
-                      <span className="ml-1.5 rounded-full bg-danger px-1.5 font-mono text-[10px] text-white">
-                        {unread}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => showPanel(null)}
-                aria-label="Fechar lateral"
-                className="grid h-8 w-8 place-items-center rounded-full text-text-muted transition-colors hover:bg-surface-sunken hover:text-text"
-              >
-                <CloseIcon />
-              </button>
-            </div>
+      {/* Celular: fundo escuro atrás da gaveta aberta */}
+      {(showChat || showPeople) && (
+        <div aria-hidden onClick={closeAll} className="fixed inset-0 z-30 bg-black/50 md:hidden" />
+      )}
 
-            {panel === "chat" ? (
-              <ChatPanel
-                messages={chatMessages}
-                send={send}
-                isSending={isSending}
-                localIdentity={localParticipant.identity}
-              />
-            ) : (
-              <>
-                <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-                  <p className="px-2 pb-1 pt-3 font-mono text-[11px] uppercase tracking-wider text-text-muted">
-                    Na chamada &mdash; {participants.length}
-                  </p>
-                  <ul className="flex flex-col gap-0.5">
-                    {sorted.map((p) => {
-                      const isLocal = p.identity === localParticipant.identity;
-                      const name = displayNameOf(p);
-                      return (
-                        <MemberRow
-                          key={p.identity}
-                          participant={p}
-                          isLocal={isLocal}
-                          silencedUntil={silencedUntil[p.identity]}
-                          now={now}
-                          expanded={expanded === p.identity}
-                          onToggle={() => setExpanded((cur) => (cur === p.identity ? null : p.identity))}
-                          volume={volumes[name] ?? 100}
-                          onVolume={(v) => setVolumeFor(name, v)}
-                          onMute={handleMute}
-                          muting={mutingId === p.identity}
-                        />
-                      );
-                    })}
-                  </ul>
-                  {participants.length > 1 && (
-                    <p className="px-2 pt-3 text-[11.5px] leading-relaxed text-text-muted">
-                      Clique em alguém para ajustar o volume ou silenciar.
-                    </p>
-                  )}
-                </div>
-    
-                <div className="border-t border-border p-3">
-                  <button
-                    type="button"
-                    onClick={copyLink}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-accent-ink transition-transform hover:-translate-y-px"
-                  >
-                    <LinkIcon />
-                    {copied ? "Link copiado!" : "Copiar link da sala"}
-                  </button>
-                </div>
-              </>
+      {/* Chat: coluna própria no computador, gaveta no celular */}
+      {showChat && (
+        <aside
+          aria-label="Chat da sala"
+          className="fixed inset-y-0 right-0 z-40 flex w-[min(360px,92vw)] flex-col border-l border-border bg-surface md:static md:z-auto md:w-80"
+        >
+          <PanelHeader title="Chat" onClose={toggleChat} closeLabel="Fechar chat" />
+          <ChatPanel
+            messages={chatMessages}
+            send={send}
+            isSending={isSending}
+            localIdentity={localParticipant.identity}
+          />
+        </aside>
+      )}
+
+      {/* Quem está online: coluna à direita, ao lado do chat */}
+      {showPeople && (
+        <aside
+          aria-label="Pessoas na chamada"
+          className="fixed inset-y-0 right-0 z-40 flex w-[min(320px,88vw)] flex-col border-l border-border bg-[color-mix(in_srgb,var(--surface)_65%,var(--bg))] md:static md:z-auto md:w-64"
+        >
+          <PanelHeader
+            title="Pessoas"
+            count={participants.length}
+            onClose={togglePeople}
+            closeLabel="Fechar lista de pessoas"
+          />
+          <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+            <p className="px-2 pb-1 pt-3 font-mono text-[11px] uppercase tracking-wider text-text-muted">
+              Na chamada &mdash; {participants.length}
+            </p>
+            <ul className="flex flex-col gap-0.5">
+              {sorted.map((p) => {
+                const isLocal = p.identity === localParticipant.identity;
+                const name = displayNameOf(p);
+                return (
+                  <MemberRow
+                    key={p.identity}
+                    participant={p}
+                    isLocal={isLocal}
+                    silencedUntil={silencedUntil[p.identity]}
+                    now={now}
+                    expanded={expanded === p.identity}
+                    onToggle={() => setExpanded((cur) => (cur === p.identity ? null : p.identity))}
+                    volume={volumes[name] ?? 100}
+                    onVolume={(v) => setVolumeFor(name, v)}
+                    onMute={handleMute}
+                    muting={mutingId === p.identity}
+                  />
+                );
+              })}
+            </ul>
+            {participants.length > 1 && (
+              <p className="px-2 pt-3 text-[11.5px] leading-relaxed text-text-muted">
+                Clique em alguém para ajustar o volume ou silenciar.
+              </p>
             )}
-          </aside>
-        </>
+          </div>
+
+          <div className="border-t border-border p-3">
+            <button
+              type="button"
+              onClick={copyLink}
+              className="flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-accent-ink transition-transform hover:-translate-y-px"
+            >
+              <LinkIcon />
+              {copied ? "Link copiado!" : "Copiar link da sala"}
+            </button>
+          </div>
+        </aside>
       )}
 
       {alert && (
