@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { AccessToken } from "livekit-server-sdk";
-
-const ROOM_RE = /^[a-zA-Z0-9_+-]{1,64}$/;
+import { MISSING_ENV_ERROR, ROOM_RE, livekitEnv } from "@/lib/livekit";
 
 export async function POST(req: NextRequest) {
   let body: { room?: unknown; name?: unknown };
@@ -21,18 +20,14 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Informe um nome." }, { status: 400 });
   }
 
-  const apiKey = process.env.LIVEKIT_API_KEY;
-  const apiSecret = process.env.LIVEKIT_API_SECRET;
-  const wsUrl = process.env.LIVEKIT_URL;
-
-  if (!apiKey || !apiSecret || !wsUrl) {
-    return NextResponse.json(
-      { error: "Servidor sem as variáveis LIVEKIT_API_KEY / LIVEKIT_API_SECRET / LIVEKIT_URL configuradas." },
-      { status: 500 },
-    );
+  const env = livekitEnv();
+  if (!env) {
+    return NextResponse.json({ error: MISSING_ENV_ERROR }, { status: 500 });
   }
 
-  const at = new AccessToken(apiKey, apiSecret, {
+  // canUpdateOwnMetadata fica desligado (padrão): os atributos do participante
+  // (ex.: silencedUntil) só podem ser alterados pelo servidor, então dá pra confiar neles.
+  const at = new AccessToken(env.apiKey, env.apiSecret, {
     identity: `${name}-${Math.random().toString(36).slice(2, 8)}`,
     name,
     ttl: "4h",
@@ -47,5 +42,5 @@ export async function POST(req: NextRequest) {
 
   const token = await at.toJwt();
 
-  return NextResponse.json({ token, url: wsUrl });
+  return NextResponse.json({ token, url: env.wsUrl });
 }

@@ -1,8 +1,16 @@
 "use client";
 
 import { Fragment, useEffect, useRef, useState } from "react";
-import type { ReceivedChatMessage } from "@livekit/components-react";
-import { Avatar, displayNameOf, nameColor } from "./avatar";
+import { Avatar, nameColor } from "./avatar";
+
+/** Mensagem pronta para mostrar: vem ao vivo (LiveKit) ou do histórico salvo. */
+export type ChatItem = {
+  id: string;
+  timestamp: number;
+  message: string;
+  identity: string;
+  name: string;
+};
 
 const MAX_LENGTH = 500;
 // Mensagens seguidas da mesma pessoa em até 5 min ficam no mesmo bloco.
@@ -46,16 +54,28 @@ function SendIcon() {
   );
 }
 
+function typingText(names: string[]) {
+  if (names.length === 1) return `${names[0]} está digitando`;
+  if (names.length === 2) return `${names[0]} e ${names[1]} estão digitando`;
+  return "Várias pessoas estão digitando";
+}
+
 export default function ChatPanel({
   messages,
   send,
   isSending,
   localIdentity,
+  typingNames,
+  onTyping,
+  historyEnabled,
 }: {
-  messages: ReceivedChatMessage[];
+  messages: ChatItem[];
   send: (text: string) => Promise<unknown>;
   isSending: boolean;
   localIdentity: string;
+  typingNames: string[];
+  onTyping: (typing: boolean) => void;
+  historyEnabled: boolean;
 }) {
   const [draft, setDraft] = useState("");
   const [sendError, setSendError] = useState("");
@@ -100,20 +120,19 @@ export default function ChatPanel({
           <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
             <p className="text-sm font-semibold text-text">Nenhuma mensagem ainda</p>
             <p className="text-[12.5px] leading-relaxed text-text-muted">
-              Mande um oi! As mensagens aparecem só para quem está na sala agora e somem quando
-              você sai.
+              {historyEnabled
+                ? "Mande um oi! As mensagens ficam salvas por 7 dias para quem entrar depois."
+                : "Mande um oi! As mensagens aparecem só para quem está na sala agora e somem quando você sai."}
             </p>
           </div>
         ) : (
           <ol className="flex flex-col">
             {messages.map((m, i) => {
               const prev = messages[i - 1];
-              const sender = m.from ? displayNameOf(m.from) : "Alguém";
-              const senderId = m.from?.identity ?? "";
+              const sender = m.name;
+              const senderId = m.identity;
               const grouped =
-                !!prev &&
-                (prev.from?.identity ?? "") === senderId &&
-                m.timestamp - prev.timestamp < GROUP_WINDOW_MS;
+                !!prev && prev.identity === senderId && m.timestamp - prev.timestamp < GROUP_WINDOW_MS;
               const isMe = senderId === localIdentity;
 
               return (
@@ -155,7 +174,19 @@ export default function ChatPanel({
         )}
       </div>
 
-      <form onSubmit={submit} className="border-t border-border p-3">
+      <form onSubmit={submit} className="border-t border-border px-3 pb-3 pt-1.5">
+        <p className="h-5 truncate text-[11.5px] italic text-text-muted" aria-live="polite">
+          {typingNames.length > 0 && (
+            <>
+              <span className="mr-1 inline-flex gap-0.5 align-middle not-italic" aria-hidden>
+                <span className="h-1 w-1 animate-bounce rounded-full bg-text-muted [animation-delay:-0.3s]" />
+                <span className="h-1 w-1 animate-bounce rounded-full bg-text-muted [animation-delay:-0.15s]" />
+                <span className="h-1 w-1 animate-bounce rounded-full bg-text-muted" />
+              </span>
+              {typingText(typingNames)}...
+            </>
+          )}
+        </p>
         {sendError && <p className="pb-2 text-xs text-danger">{sendError}</p>}
         <div className="flex items-end gap-2 rounded-xl border border-border bg-surface-sunken px-3 py-2 focus-within:border-accent-2">
           <textarea
@@ -163,7 +194,10 @@ export default function ChatPanel({
             rows={1}
             value={draft}
             maxLength={MAX_LENGTH}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              onTyping(e.target.value.trim().length > 0);
+            }}
             onKeyDown={(e) => {
               // Enter envia; Shift+Enter quebra a linha.
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {

@@ -1,24 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ConnectionQuality, RoomEvent, Track } from "livekit-client";
 import {
+  CarouselLayout,
+  FocusLayout,
+  FocusLayoutContainer,
   GridLayout,
+  LayoutContextProvider,
   ParticipantTile,
   RoomAudioRenderer,
+  isTrackReference,
   useChat,
   useConnectionQualityIndicator,
+  useCreateLayoutContext,
   useDataChannel,
   useIsSpeaking,
   useLocalParticipant,
   useParticipants,
+  usePinnedTracks,
   useRoomContext,
   useTracks,
   useTrackToggle,
 } from "@livekit/components-react";
-import type { Participant, RemoteParticipant } from "livekit-client";
+import type { TrackReference, TrackReferenceOrPlaceholder } from "@livekit/components-react";
+import type { Participant, RemoteParticipant, ScreenShareCaptureOptions } from "livekit-client";
+import { STORAGE, readJSON, writeStorage } from "@/lib/storage";
 import { Avatar, displayNameOf } from "./avatar";
-import ChatPanel from "./chat-panel";
+import ChatPanel, { type ChatItem } from "./chat-panel";
+import SettingsDialog, { DEFAULT_PREFS, PTT_KEY_LABEL, type Prefs } from "./settings-dialog";
+import { playSound } from "./sounds";
 
 // A partir desta largura, chat e lista de pessoas cabem lado a lado sem espremer o vídeo.
 const ROOMY = "(min-width: 1100px)";
@@ -36,7 +47,17 @@ type SilenceAlert = {
 
 type Toast = { id: number; text: string };
 
-const VOLUME_KEY = "chatbem:volumes";
+// Compartilhar tela com áudio: no Chrome/Edge aparece a opção "Compartilhar áudio"
+// (som da aba ou do sistema no Windows). Não mostra a própria aba do Chatbem na lista.
+const SCREEN_CAPTURE: ScreenShareCaptureOptions = {
+  audio: true,
+  systemAudio: "include",
+  selfBrowserSurface: "exclude",
+  surfaceSwitching: "include",
+};
+
+// Quanto tempo "fulano está digitando" fica na tela sem novo sinal.
+const TYPING_TTL_MS = 3500;
 
 /* ---------- Ícones ---------- */
 
@@ -112,6 +133,20 @@ function ChatIcon() {
   );
 }
 
+function GearIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1.1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34H9a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87V9a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -169,20 +204,21 @@ function PanelHeader({
 /* ---------- Utilidades ---------- */
 
 function loadVolumes(): Record<string, number> {
-  try {
-    const raw = localStorage.getItem(VOLUME_KEY);
-    return raw ? (JSON.parse(raw) as Record<string, number>) : {};
-  } catch {
-    return {};
-  }
+  return readJSON<Record<string, number>>(STORAGE.volumes, {});
 }
 
 function saveVolumes(volumes: Record<string, number>) {
-  try {
-    localStorage.setItem(VOLUME_KEY, JSON.stringify(volumes));
-  } catch {
-    // armazenamento bloqueado (aba anônima etc.) — só não lembra o volume
-  }
+  writeStorage(STORAGE.volumes, JSON.stringify(volumes));
+}
+
+function isTyping(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+function sameTrack(a?: TrackReferenceOrPlaceholder, b?: TrackReferenceOrPlaceholder) {
+  if (!a || !b) return false;
+  return a.participant.identity === b.participant.identity && a.source === b.source;
 }
 
 /* ---------- Componentes ---------- */
@@ -231,7 +267,11 @@ function ControlButton({
   onLabel: string;
   offLabel: string;
 }) {
-  const { toggle, enabled, pending } = useTrackToggle({ source });
+  const { toggle, enabled, pending } = useTrackToggle({
+    source,
+    // Tela vai com o som (do jogo/vídeo) quando o navegador permite.
+    ...(source === Track.Source.ScreenShare ? { captureOptions: SCREEN_CAPTURE } : {}),
+  });
   const Icon =
     source === Track.Source.Microphone
       ? MicIcon
@@ -393,10 +433,15 @@ function MemberRow({
 
 export default function CallUI({
   room,
+  token,
+  onMicChange,
   mediaWarning,
   onDismissMediaWarning,
 }: {
   room: string;
+  /** Token do LiveKit desta pessoa: prova para o servidor quem está pedindo (chat, silenciar). */
+  token: string;
+  onMicChange: (id: string) => void;
   mediaWarning?: string;
   onDismissMediaWarning?: () => void;
 }) {
@@ -407,26 +452,53 @@ export default function CallUI({
   ]);
   const participants = useParticipants();
   const { localParticipant } = useLocalParticipant();
+  const authHeaders = useMemo(
+    () => ({ "Content-Type": "application/json", Authorization: `Bearer ${token}` }),
+    [token],
+  );
 
   // Esta tela só existe depois que a pessoa clica em "Entrar", então window já existe.
   // Pessoas abre sozinho a partir de tablet; o chat também abre em telas largas.
   const [showPeople, setShowPeople] = useState(() => matches("(min-width: 768px)"));
   const [showChat, setShowChat] = useState(() => matches("(min-width: 1280px)"));
+  const [showSettings, setShowSettings] = useState(false);
+  const [prefs, setPrefs] = useState<Prefs>(() => readJSON(STORAGE.prefs, DEFAULT_PREFS));
+  const prefsRef = useRef(prefs);
+  useEffect(() => {
+    prefsRef.current = prefs;
+  }, [prefs]);
+
+  /* --- Chat --- */
   const { chatMessages, send, isSending } = useChat();
+  const [history, setHistory] = useState<ChatItem[]>([]);
+  const [historyEnabled, setHistoryEnabled] = useState(false);
   // Quantas mensagens já tinham chegado da última vez que o chat esteve visível.
   const [seenCount, setSeenCount] = useState(0);
   const chatVisible = showChat;
   const unread = chatVisible ? 0 : chatMessages.length - seenCount;
+  // Mensagens que chegaram enquanto a aba estava em segundo plano (para o título da aba).
+  const [hiddenAtCount, setHiddenAtCount] = useState<number | null>(null);
+  const awayCount = hiddenAtCount === null ? 0 : chatMessages.length - hiddenAtCount;
   const lastToasted = useRef(0);
+  const [typing, setTyping] = useState<Record<string, { name: string; until: number }>>({});
+  const lastTypingSent = useRef(0);
+
+  /* --- Silenciar, volume, avisos --- */
   const [expanded, setExpanded] = useState<string | null>(null);
   const [alert, setAlert] = useState<SilenceAlert | null>(null);
-  const [silencedUntil, setSilencedUntil] = useState<Record<string, number>>({});
+  const [alertSilenced, setAlertSilenced] = useState<Record<string, number>>({});
   const [mutingId, setMutingId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [volumes, setVolumes] = useState<Record<string, number>>(loadVolumes);
   const [copied, setCopied] = useState(false);
   const toastId = useRef(0);
+  const restoreRequested = useRef(new Set<string>());
+
+  /* --- Tela ampliada --- */
+  const layoutContext = useCreateLayoutContext();
+  const focusTrack = usePinnedTracks(layoutContext)?.[0];
+  const autoFocused = useRef<TrackReferenceOrPlaceholder | null>(null);
 
   const pushToast = useCallback((text: string) => {
     const id = ++toastId.current;
@@ -434,10 +506,16 @@ export default function CallUI({
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
   }, []);
 
-  // Avisos de quem entrou e saiu.
+  // Avisos (e sons) de quem entrou e saiu.
   useEffect(() => {
-    const onJoin = (p: RemoteParticipant) => pushToast(`${displayNameOf(p)} entrou na sala`);
-    const onLeave = (p: RemoteParticipant) => pushToast(`${displayNameOf(p)} saiu da sala`);
+    const onJoin = (p: RemoteParticipant) => {
+      pushToast(`${displayNameOf(p)} entrou na sala`);
+      if (prefsRef.current.sounds) playSound("join");
+    };
+    const onLeave = (p: RemoteParticipant) => {
+      pushToast(`${displayNameOf(p)} saiu da sala`);
+      if (prefsRef.current.sounds) playSound("leave");
+    };
     lkRoom.on(RoomEvent.ParticipantConnected, onJoin);
     lkRoom.on(RoomEvent.ParticipantDisconnected, onLeave);
     return () => {
@@ -446,17 +524,121 @@ export default function CallUI({
     };
   }, [lkRoom, pushToast]);
 
-  // Mostra um aviso rápido quando chega mensagem e o chat está fechado.
+  // Histórico do chat (quando o servidor tem banco configurado).
   useEffect(() => {
-    const fresh = chatMessages.slice(lastToasted.current);
+    let alive = true;
+    fetch(`/api/chat?room=${encodeURIComponent(room)}`, { headers: authHeaders, cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { enabled?: boolean; messages?: ChatItem[] } | null) => {
+        if (!alive || !data) return;
+        setHistoryEnabled(!!data.enabled);
+        setHistory(data.messages ?? []);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [room, authHeaders]);
+
+  // Mensagem nova: aviso rápido + som quando o chat está fechado ou a aba está em segundo plano.
+  useEffect(() => {
+    const fresh = chatMessages
+      .slice(lastToasted.current)
+      .filter((m) => m.from && m.from.identity !== localParticipant.identity);
     lastToasted.current = chatMessages.length;
+    if (fresh.length === 0) return;
+    if (prefsRef.current.sounds && (!chatVisible || document.hidden)) playSound("message");
     if (chatVisible) return;
     for (const m of fresh) {
-      if (!m.from || m.from.identity === localParticipant.identity) continue;
       const preview = m.message.length > 60 ? `${m.message.slice(0, 60)}…` : m.message;
-      pushToast(`${displayNameOf(m.from)}: ${preview}`);
+      pushToast(`${displayNameOf(m.from!)}: ${preview}`);
     }
   }, [chatMessages, chatVisible, localParticipant.identity, pushToast]);
+
+  // Conta mensagens que chegaram com a aba em segundo plano.
+  const messageCountRef = useRef(0);
+  useEffect(() => {
+    messageCountRef.current = chatMessages.length;
+  }, [chatMessages.length]);
+  useEffect(() => {
+    const onVisibility = () => setHiddenAtCount(document.hidden ? messageCountRef.current : null);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => document.removeEventListener("visibilitychange", onVisibility);
+  }, []);
+
+  // Título da aba: "(3) dota+ · Chatbem" quando tem mensagem nova.
+  const titleCount = Math.max(unread, awayCount);
+  useEffect(() => {
+    document.title = titleCount > 0 ? `(${titleCount}) ${room} · Chatbem` : `${room} · Chatbem`;
+  }, [titleCount, room]);
+  useEffect(
+    () => () => {
+      document.title = "Chatbem";
+    },
+    [],
+  );
+
+  // "Fulano está digitando..."
+  const { send: sendTyping } = useDataChannel("typing", (msg) => {
+    const from = msg.from;
+    if (!from) return;
+    try {
+      const data = JSON.parse(new TextDecoder().decode(msg.payload)) as { typing?: boolean };
+      setTyping((prev) => {
+        const next = { ...prev };
+        if (data.typing) {
+          next[from.identity] = { name: displayNameOf(from), until: Date.now() + TYPING_TTL_MS };
+        } else {
+          delete next[from.identity];
+        }
+        return next;
+      });
+      setNow(Date.now());
+    } catch {
+      // formato inesperado, ignora
+    }
+  });
+
+  const notifyTyping = useCallback(
+    (isTypingNow: boolean) => {
+      const t = Date.now();
+      if (isTypingNow && t - lastTypingSent.current < 2000) return;
+      lastTypingSent.current = isTypingNow ? t : 0;
+      sendTyping(new TextEncoder().encode(JSON.stringify({ typing: isTypingNow })), {
+        reliable: false,
+      }).catch(() => {});
+    },
+    [sendTyping],
+  );
+
+  const sendMessage = useCallback(
+    async (text: string) => {
+      const msg = await send(text);
+      notifyTyping(false);
+      // Guarda no histórico (se o servidor tiver banco); se falhar, a mensagem já foi entregue ao vivo.
+      fetch("/api/chat", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ room, id: msg.id, message: text, timestamp: msg.timestamp }),
+      }).catch(() => {});
+    },
+    [send, notifyTyping, authHeaders, room],
+  );
+
+  const liveItems: ChatItem[] = chatMessages.map((m) => ({
+    id: m.id,
+    timestamp: m.timestamp,
+    message: m.message,
+    identity: m.from?.identity ?? "",
+    name: m.from ? displayNameOf(m.from) : "Alguém",
+  }));
+  const liveIds = new Set(liveItems.map((m) => m.id));
+  const chatItems = [...history.filter((m) => !liveIds.has(m.id)), ...liveItems].sort(
+    (a, b) => a.timestamp - b.timestamp,
+  );
+  const typingNames = Object.entries(typing)
+    .filter(([id, t]) => t.until > now && id !== localParticipant.identity)
+    .map(([, t]) => t.name);
 
   // Chat e Pessoas abrem lado a lado quando a tela é larga. Em telas menores
   // (celular, tablet, janela estreita) só cabe uma coluna, então abrir uma fecha a outra.
@@ -483,6 +665,75 @@ export default function CallUI({
     setShowPeople(false);
   }
 
+  function changePrefs(next: Prefs) {
+    setPrefs(next);
+    writeStorage(STORAGE.prefs, JSON.stringify(next));
+  }
+
+  // Atalhos de teclado (ignorados enquanto a pessoa digita em algum campo).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || e.repeat || isTyping(e.target) || showSettings) return;
+      const lp = localParticipant;
+      switch (e.key.toLowerCase()) {
+        case "m":
+          if (!prefs.ptt) lp.setMicrophoneEnabled(!lp.isMicrophoneEnabled).catch(() => {});
+          break;
+        case "v":
+          lp.setCameraEnabled(!lp.isCameraEnabled).catch(() => {});
+          break;
+        case "s":
+          lp.setScreenShareEnabled(!lp.isScreenShareEnabled, SCREEN_CAPTURE).catch(() => {});
+          break;
+        case "c":
+          toggleChat();
+          break;
+        case "p":
+          togglePeople();
+          break;
+        default:
+          return;
+      }
+      e.preventDefault();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  });
+
+  // Apertar para falar: microfone desligado, liga só enquanto Espaço está pressionado.
+  useEffect(() => {
+    if (!prefs.ptt) return;
+    const setMic = (on: boolean) => localParticipant.setMicrophoneEnabled(on).catch(() => {});
+    let held = false;
+    void setMic(false);
+    const down = (e: KeyboardEvent) => {
+      if (e.code !== "Space" || isTyping(e.target)) return;
+      e.preventDefault();
+      if (e.repeat || held) return;
+      held = true;
+      void setMic(true);
+    };
+    const release = () => {
+      if (!held) return;
+      held = false;
+      void setMic(false);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.code !== "Space") return;
+      e.preventDefault();
+      release();
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", release);
+      release();
+    };
+  }, [prefs.ptt, localParticipant]);
+
   // Aplica o volume salvo (por nome) a cada pessoa, inclusive quem entrar depois.
   useEffect(() => {
     for (const p of participants) {
@@ -492,24 +743,80 @@ export default function CallUI({
     }
   }, [participants, volumes, localParticipant.identity]);
 
+  // Amplia sozinho a tela que alguém começar a compartilhar; volta à grade quando parar.
+  const remoteShares = tracks.filter(
+    (t): t is TrackReference =>
+      isTrackReference(t) && t.source === Track.Source.ScreenShare && !t.participant.isLocal,
+  );
+  const shareKey = remoteShares.map((t) => t.participant.identity).join("|");
+  const trackKey = tracks.map((t) => `${t.participant.identity}:${t.source}`).join("|");
+  useEffect(() => {
+    const dispatch = layoutContext.pin.dispatch;
+    if (!dispatch) return;
+    if (remoteShares.length > 0 && !autoFocused.current) {
+      dispatch({ msg: "set_pin", trackReference: remoteShares[0] });
+      autoFocused.current = remoteShares[0];
+    } else if (autoFocused.current && !remoteShares.some((t) => sameTrack(t, autoFocused.current!))) {
+      if (sameTrack(focusTrack, autoFocused.current)) dispatch({ msg: "clear_pin" });
+      autoFocused.current = null;
+    }
+    // A tela ampliada sumiu (a pessoa parou de compartilhar ou saiu).
+    if (focusTrack && !tracks.some((t) => sameTrack(t, focusTrack))) dispatch({ msg: "clear_pin" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- shareKey/trackKey resumem as listas
+  }, [shareKey, trackKey, focusTrack, layoutContext]);
+  const carouselTracks = tracks.filter((t) => !sameTrack(t, focusTrack));
+
+  /* --- Silenciar --- */
   useDataChannel("silence-alert", (msg) => {
     try {
       const data = JSON.parse(new TextDecoder().decode(msg.payload)) as SilenceAlert;
       setAlert(data);
-      setSilencedUntil((prev) => ({ ...prev, [data.identity]: data.until }));
+      setAlertSilenced((prev) => ({ ...prev, [data.identity]: data.until }));
     } catch {
       // mensagem em formato inesperado, ignora
     }
   });
 
-  // Atualiza o relógio a cada segundo enquanto houver alguém silenciado, pra
-  // contar regressivamente e liberar o botão de silenciar de novo depois.
+  // Quem está silenciado vem do servidor (atributo do participante, vale para quem
+  // entrou depois) e também do aviso em tempo real.
+  const silencedUntil: Record<string, number> = { ...alertSilenced };
+  for (const p of participants) {
+    const v = Number(p.attributes?.silencedUntil);
+    if (v) silencedUntil[p.identity] = Math.max(silencedUntil[p.identity] ?? 0, v);
+  }
+  const silenceKey = Object.entries(silencedUntil)
+    .map(([id, u]) => `${id}:${u}`)
+    .join("|");
+
+  // Quando o minuto acaba, pede ao servidor para devolver o microfone. O servidor confere o
+  // horário, então tanto faz quem pede; todos pedem para não depender de uma pessoa só.
   useEffect(() => {
-    const hasActive = Object.values(silencedUntil).some((until) => until > now);
-    if (!hasActive && !alert) return;
+    for (const [identity, until] of Object.entries(silencedUntil)) {
+      if (until > now) continue;
+      const p = participants.find((x) => x.identity === identity);
+      if (!p?.attributes?.silencedUntil) continue;
+      const key = `${identity}:${until}`;
+      if (restoreRequested.current.has(key)) continue;
+      restoreRequested.current.add(key);
+      fetch("/api/mute/restore", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({ room, identity }),
+      }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- silenceKey resume silencedUntil
+  }, [now, silenceKey, participants, authHeaders, room]);
+
+  // Relógio de 1s enquanto há contagem regressiva, alguém digitando ou aviso na tela.
+  const needsClock =
+    Object.values(silencedUntil).some((u) => u > now - 30_000) ||
+    Object.values(typing).some((t) => t.until > now) ||
+    !!alert;
+  useEffect(() => {
+    if (!needsClock) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
-  }, [silencedUntil, alert, now]);
+  }, [needsClock]);
 
   useEffect(() => {
     if (!alert) return;
@@ -540,8 +847,8 @@ export default function CallUI({
     try {
       const res = await fetch("/api/mute", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ room, identity: target.identity, name: displayNameOf(target) }),
+        headers: authHeaders,
+        body: JSON.stringify({ room, identity: target.identity }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -602,9 +909,32 @@ export default function CallUI({
         )}
 
         <div className="relative min-h-0 flex-1 overflow-hidden p-3">
-          <GridLayout tracks={tracks} className="h-full">
-            <ParticipantTile />
-          </GridLayout>
+          {/* Clique no ícone de ampliar de um vídeo/tela para deixá-lo grande; as outras
+              pessoas ficam numa faixa ao lado. */}
+          <LayoutContextProvider value={layoutContext}>
+            {focusTrack ? (
+              <FocusLayoutContainer className="h-full">
+                <CarouselLayout tracks={carouselTracks}>
+                  <ParticipantTile />
+                </CarouselLayout>
+                <FocusLayout trackRef={focusTrack} />
+              </FocusLayoutContainer>
+            ) : (
+              <GridLayout tracks={tracks} className="h-full">
+                <ParticipantTile />
+              </GridLayout>
+            )}
+          </LayoutContextProvider>
+
+          {focusTrack && (
+            <button
+              type="button"
+              onClick={() => layoutContext.pin.dispatch?.({ msg: "clear_pin" })}
+              className="absolute left-5 top-5 z-10 rounded-full border border-border bg-surface/90 px-3 py-1.5 text-xs font-semibold text-text backdrop-blur transition-colors hover:border-accent-2 hover:text-accent-2"
+            >
+              Voltar para a grade
+            </button>
+          )}
 
           {toasts.length > 0 && (
             <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex flex-col items-center gap-2 px-4">
@@ -622,7 +952,11 @@ export default function CallUI({
         </div>
 
         <div className="flex flex-wrap items-center justify-center gap-2 border-t border-border px-3 py-3 sm:gap-3 sm:py-4">
-          <ControlButton source={Track.Source.Microphone} onLabel="Microfone" offLabel="Mudo" />
+          <ControlButton
+            source={Track.Source.Microphone}
+            onLabel={prefs.ptt ? "Falando" : "Microfone"}
+            offLabel={prefs.ptt ? `Segure ${PTT_KEY_LABEL}` : "Mudo"}
+          />
           <ControlButton source={Track.Source.Camera} onLabel="Câmera" offLabel="Câmera" />
           <ControlButton source={Track.Source.ScreenShare} onLabel="Parar tela" offLabel="Tela" />
 
@@ -663,6 +997,17 @@ export default function CallUI({
             )}
           </button>
 
+          <button
+            type="button"
+            onClick={() => setShowSettings(true)}
+            aria-label="Configurações"
+            title="Configurações"
+            className="flex min-w-[64px] flex-col items-center gap-1 rounded-2xl border border-border bg-surface-sunken px-3 py-2.5 text-xs font-semibold text-text-muted transition-colors hover:text-text sm:px-4"
+          >
+            <GearIcon />
+            Ajustes
+          </button>
+
           {/* Botão próprio em vez do DisconnectButton: o CSS do LiveKit sobrescrevia as cores. */}
           <button
             type="button"
@@ -688,10 +1033,13 @@ export default function CallUI({
         >
           <PanelHeader title="Chat" onClose={toggleChat} closeLabel="Fechar chat" />
           <ChatPanel
-            messages={chatMessages}
-            send={send}
+            messages={chatItems}
+            send={sendMessage}
             isSending={isSending}
             localIdentity={localParticipant.identity}
+            typingNames={typingNames}
+            onTyping={notifyTyping}
+            historyEnabled={historyEnabled}
           />
         </aside>
       )}
@@ -751,6 +1099,15 @@ export default function CallUI({
             </button>
           </div>
         </aside>
+      )}
+
+      {showSettings && (
+        <SettingsDialog
+          prefs={prefs}
+          onPrefsChange={changePrefs}
+          onMicChange={onMicChange}
+          onClose={() => setShowSettings(false)}
+        />
       )}
 
       {alert && (
